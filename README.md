@@ -2,7 +2,7 @@
 
 ## ¿Qué es?
 
-**AI Hub** es una aplicación web frontend construida con **Next.js 16 + React 19 + TypeScript** que sirve como interfaz de chat conversacional con un asistente de IA especializado en la industria del acero. Está orientada a **Ternium** (empresa siderúrgica) y permite consultar información sobre aceros globales, grados, propiedades, usos comerciales, etc.
+**AI Hub** es una aplicación web frontend construida con **Next.js 16 + React 19 + TypeScript** que sirve como interfaz de chat conversacional con un asistente de IA especializado en la industria del acero. Permite consultar información sobre aceros globales, grados, propiedades, usos comerciales, etc.
 
 ## Stack principal
 
@@ -297,7 +297,7 @@ Es el corazón de la app. Maneja:
 
 - Lista de threads con menú contextual (editar nombre, eliminar)
 - Input inline para renombrar
-- Logo de Ternium en SVG
+- Logo de la empresa en SVG
 - Usa `useIsMobile()` para adaptar comportamiento
 
 ---
