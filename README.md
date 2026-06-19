@@ -21,23 +21,23 @@
 
 ## Arquitectura
 
-```
-┌──────────────┐     ┌──────────────┐     ┌──────────────────┐     ┌──────────────────────┐
-│   Browser    │ ──▶ │  Next.js 16  │ ──▶ │  FastAPI (Python)│ ──▶ │  LangChain + LangGraph│
-│  (React SPA) │ ◀── │ (App Router) │ ◀── │  (orquestador)   │     │  (agente IA)          │
-└──────────────┘     └──────────────┘     └──────────────────┘     └──────────┬───────────┘
-                                                                              │
-                                                                              ▼
-                                                                   ┌──────────────────────┐
-                                                                   │  Microsoft Fabric SQL │
-                                                                   │  (búsquedas vectoriales)│
-                                                                   └──────────────────────┘
+```mermaid
+flowchart LR
+    Browser["Browser (React SPA)"]
+    Next["Next.js 16<br/>App Router"]
+    FastAPI["FastAPI<br/>(orquestador)"]
+    Agent["Data Agent<br/>(Fabric)"]
+    Models["Semantic Models<br/>(Fabric)"]
+
+    Browser -->|HTTP /api/chat| Next
+    Next -->|Server Actions & API Routes| FastAPI
+    FastAPI -->|Ejecuta consultas| Agent
+    Agent -->|Lee y escribe| Models
 ```
 
 - **Next.js** actúa como proxy: las Server Actions y API Routes se comunican con FastAPI.
-- **FastAPI** orquesta el agente construido con **LangChain + LangGraph**.
-- **Microsoft Fabric SQL** se usa para búsquedas vectoriales.
-- El frontend **no tiene lógica de permisos** — solo autentica al usuario y pasa el token al backend. La autorización (qué datos puede consultar cada usuario) se resuelve del lado de FastAPI.
+- **FastAPI** orquesta el **Data Agent**, que interactúa con los **Semantic Models** de Fabric.
+- El frontend **no tiene lógica de permisos** — solo autentica al usuario y pasa el token al backend. La autorización se resuelve del lado de FastAPI + Data Agent.
 
 ---
 
@@ -121,18 +121,19 @@ aihub-front/
 
 ## Flujo de autenticación
 
-```
-1. Usuario visita la app
-2. proxy.ts (middleware) verifica JWT de NextAuth
-   └─ Si MOCK_MODE=true → pasa directo
-3. layout.tsx llama a getServerSession(authOptions)
-   └─ Si MOCK_MODE=true → renderiza igual sin session
-4. NextAuth.js redirige a Azure AD para login
-5. Azure AD devuelve access_token + refresh_token
-6. NextAuth los guarda en JWT (cookie httpOnly)
-7. api-client.ts usa el refresh_token para obtener un API token
-   con scope del backend vía OAuth2 (login.microsoftonline.com)
-8. Todas las requests a FastAPI llevan: Authorization: Bearer <api_token>
+```mermaid
+flowchart TD
+    User["Usuario"] --> App["Visita la app"]
+    App --> Middleware["proxy.ts middleware<br/>¿JWT válido?"]
+    Middleware -->|No| Login["Redirige a Azure AD"]
+    Middleware -->|"Sí o MOCK_MODE"| Layout["layout.tsx<br/>getServerSession()"]
+    Login --> AzureAD["Azure AD login"]
+    AzureAD -->|access_token + refresh_token| NextAuth["NextAuth.js<br/>Guarda en JWT (cookie httpOnly)"]
+    Layout --> Session["¿Session válida?"]
+    Session -->|No| Block["Pantalla: Inicia sesión"]
+    Session -->|"Sí o MOCK_MODE"| Render["Renderiza la app"]
+    Render --> API["api-client.ts<br/>refresh → API token (OAuth2)"]
+    API --> FastAPI["FastAPI<br/>Authorization: Bearer &lt;token&gt;"]
 ```
 
 **Tipos de sesión** (`types/next-auth.d.ts`):
@@ -144,23 +145,31 @@ aihub-front/
 
 ## Flujo del chat (streaming)
 
-```
-1. Usuario escribe mensaje y hace submit
-2. chat-input.tsx → sendMessage(content) en useChat.ts
-3. useChat.ts hace fetch POST /api/chat con:
-   - id (thread_id)
-   - messages (solo el último mensaje)
-   - timezone, language, output_format
-4. app/api/chat/route.ts recibe y:
-   └─ Si MOCK_MODE=true → mockStreamResponse() (simula palabras con delay)
-   └─ Si no → apiClient.stream() → fetch a FastAPI /messages/stream
-5. El backend responde con NDJSON (Newline-Delimited JSON):
-   {"messages":[{"content":"parcial","type":"AIMessageChunk","id":"..."}]}
-   {"messages":[{"content":"final","type":"ai","id":"...",...}],"status":"done"}
-6. useChat.ts parsea con NDjsonTransformer (TextDecoderStream + TransformStream)
-7. add_messages() mergea chunks acumulando content parcial
-8. ChatMessages renderiza cada chunk en tiempo real (scroll automático)
-9. Al llegar status:"done" se limpia el estado de streaming
+```mermaid
+sequenceDiagram
+    actor User as Usuario
+    participant Input as chat-input.tsx
+    participant Hook as useChat.ts
+    participant Route as /api/chat/route.ts
+    participant Mock as mockStreamResponse
+    participant FastAPI as FastAPI Backend
+    participant UI as ChatMessages
+
+    User->>Input: Escribe mensaje + Enter
+    Input->>Hook: sendMessage(content)
+    Hook->>Route: fetch POST /api/chat<br/>{id, messages, timezone, language}
+    alt MOCK_MODE=true
+        Route->>Mock: mockStreamResponse()
+        Mock-->>Hook: NDJSON stream simulado<br/>(palabra por palabra)
+    else
+        Route->>FastAPI: apiClient.stream()<br/>POST /messages/stream
+        FastAPI-->>Hook: NDJSON stream real
+    end
+    Hook->>Hook: NDjsonTransformer parsea<br/>TextDecoderStream + TransformStream
+    Hook->>Hook: add_messages() mergea chunks
+    Hook-->>UI: setState con mensajes actualizados
+    UI->>UI: Renderiza cada chunk (scroll automático)
+    Note over Hook,UI: status: "done" → fin del streaming
 ```
 
 ### Formato NDJSON (PartialState)
@@ -192,23 +201,22 @@ interface PartialState {
 
 ## Flujo de threads (Server Actions)
 
-Todas las operaciones de threads se hacen via **Server Actions** (RSC):
+```mermaid
+flowchart LR
+    Sidebar["ChatSidebar"] --> ListHook["useThreadListQuery"]
+    Sidebar --> DeleteHook["useDeleteThread"]
+    Sidebar --> RenameHook["useRenameThread"]
+    Content["ChatContent"] --> ThreadHook["useThreadQuery"]
 
-```
-useThreadList / useThread / useDeleteThread / useRenameThread
-    ↓
-actions/thread.ts (Server Actions, 'use server')
-    ↓
-apiClient.post()  ──▶  FastAPI  ──▶  Fabric SQL
-```
+    ListHook --> SA["actions/thread.ts<br/>(Server Actions)"]
+    DeleteHook --> SA
+    RenameHook --> SA
+    ThreadHook --> SA
 
-| Server Action | Endpoint FastAPI |
-|---|---|
-| `getThreadList()` | `POST /thread/list` |
-| `getThread(id)` | `POST /thread/get` |
-| `deleteThread(id)` | `POST /thread/delete` |
-| `renameThread(id, title)` | `POST /thread/rename` |
-| `getAppInfo()` | `GET /ui/app_info?language=es` |
+    SA --> API["apiClient.post()"]
+    API --> FastAPI["FastAPI"]
+    FastAPI --> Fabric["Fabric SQL"]
+```
 
 Los hooks usan TanStack React Query para cachear las respuestas (`staleTime: Infinity`) e invalidar la lista cuando se crea/elimina/renombra un thread.
 
@@ -216,13 +224,20 @@ Los hooks usan TanStack React Query para cachear las respuestas (`staleTime: Inf
 
 ## Feedback de mensajes
 
-```
-message-actions.tsx (cliente):
-  fetch POST /api/messages/feedback { threadId, messageId, score, comment }
-    ↓
-app/api/messages/feedback/route.ts
-    ↓
-apiClient.submitFeedback() → POST /messages/feedback (FastAPI)
+```mermaid
+sequenceDiagram
+    participant Actions as message-actions.tsx
+    participant Route as /api/messages/feedback/route.ts
+    participant FastAPI as FastAPI Backend
+
+    Actions->>Route: fetch POST /api/messages/feedback<br/>{threadId, messageId, score, comment}
+    alt MOCK_MODE=true
+        Route-->>Actions: 204 No Content
+    else
+        Route->>FastAPI: apiClient.submitFeedback()
+        FastAPI-->>Route: 204 No Content
+        Route-->>Actions: 204 No Content
+    end
 ```
 
 El feedback se envía directamente desde el cliente al API route de Next.js, que lo reenvía a FastAPI. No usa Server Actions.
@@ -235,14 +250,15 @@ Activado con `MOCK_MODE=true` en `.env.local`. Permite correr el frontend comple
 
 ### Qué mockea:
 
-| Capa | Comportamiento |
-|---|---|
-| `proxy.ts` (middleware) | Salta verificación de JWT |
-| `layout.tsx` | Renderiza children sin session |
-| `actions/thread.ts` | `getThreadList()` → 3 threads de prueba. `getThread()` → null. `deleteThread/renameThread` → "ok" |
-| `actions/app-info.ts` | `getAppInfo()` → datos mock del chatbot |
-| `app/api/chat/route.ts` | `POST /api/chat` → stream NDJSON simulado (palabra por palabra con delay). Responde con markdown real sobre aceros incluyendo tabla y blockquote |
-| `app/api/messages/feedback/route.ts` | `POST` → 204 No Content |
+```mermaid
+flowchart TD
+    subgraph MockMode [MOCK_MODE=true]
+        direction LR
+        MW["proxy.ts<br/>Salta JWT"] --> LY["layout.tsx<br/>Renderiza sin session"]
+        LY --> SA["Server Actions<br/>Datos mock"]
+        LY --> API["API Routes<br/>Stream + feedback mock"]
+    end
+```
 
 ### Datos mock (`lib/mock-data.ts`):
 
@@ -338,4 +354,61 @@ El frontend **no gestiona permisos**. Solo se encarga de:
 1. **Autenticar** al usuario contra Azure AD (NextAuth)
 2. **Pasar el token** al backend FastAPI vía `Authorization: Bearer`
 
-No hay tipos para roles ni lógica de autorización en el frontend. La sesión solo contiene `userId`, `accessToken` y `refreshToken`. Todo el control de acceso a los datos se resuelve del lado de FastAPI + LangChain/LangGraph, que determinan según la identidad del usuario qué puede consultar en Fabric SQL.
+No hay tipos para roles ni lógica de autorización en el frontend. La sesión solo contiene `userId`, `accessToken` y `refreshToken`. Todo el control de acceso a los datos se resuelve del lado de FastAPI + Data Agent, que determinan según la identidad del usuario qué puede consultar en los Semantic Models.
+
+---
+
+## POC Local
+
+### Opción 1: Solo frontend (mock, sin backend)
+
+```bash
+npm run dev
+# MOCK_MODE=true → datos mock, no necesita backend
+```
+
+### Opción 2: Full stack (frontend + Data Agent real local)
+
+Requiere Python. En una terminal:
+```bash
+cd pocs\fastapi-data-agent
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+```
+
+En otra terminal:
+```bash
+# Editar .env.local:
+#   MOCK_MODE=false
+#   API_BACKEND_URL=http://localhost:8000
+npm run dev
+```
+
+### Opción 3: Script todo-en-uno
+
+```powershell
+.\pocs\start-poc.ps1
+```
+
+Arranca automáticamente FastAPI (puerto 8000) y Next.js (puerto 3000).
+
+### Endpoints del Data Agent POC
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/ui/app_info` | Info del chatbot |
+| POST | `/thread/list` | Lista de conversaciones |
+| POST | `/thread/get` | Obtener conversación |
+| POST | `/thread/delete` | Eliminar conversación |
+| POST | `/thread/rename` | Renombrar conversación |
+| POST | `/messages/feedback` | Enviar feedback |
+| POST | `/messages/stream` | Chat streaming NDJSON |
+
+### Semantic Models mockeados
+
+El Data Agent POC incluye datos de prueba sobre:
+- **Aceros globales** (SAE 1018, 1045, 304, 316, A36, 4140, 8620)
+- **Grupos de acero** con cantidades
+- **Porcentajes de chatarra** por grado
+
+Al consultar "aceros inoxidables", "304", "grupos", "chatarra", etc., el Data Agent responde con datos filtrados desde los Semantic Models simulados.
