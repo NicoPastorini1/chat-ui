@@ -2,7 +2,7 @@
 
 ## ¿Qué es?
 
-**AI Hub** es una aplicación web frontend construida con **Next.js 16 + React 19 + TypeScript** que sirve como interfaz de chat conversacional con un asistente de IA especializado en la industria del acero. Permite consultar información sobre aceros globales, grados, propiedades, usos comerciales, etc.
+**AI Hub** es una aplicación web frontend construida con **Next.js 16 + React 19 + TypeScript** que sirve como interfaz de chat conversacional con un asistente de IA. Permite consultar información mediante lenguaje natural con respuestas en streaming.
 
 ## Stack principal
 
@@ -263,11 +263,9 @@ flowchart TD
 ### Datos mock (`lib/mock-data.ts`):
 
 ```typescript
-MOCK_THREAD_LIST: 3 threads ("Aceros con alto contenido de carbono",
-                   "Propiedades del acero inoxidable 304",
-                   "Comparativa de grados de acero estructural")
-MOCK_APP_INFO: { title: "Global Steel Grade",
-                 subtitle: "Agente especializado en aceros globales y pesquería" }
+MOCK_THREAD_LIST: 3 threads con títulos genéricos de ejemplo
+MOCK_APP_INFO: { title: "AI Assistant",
+                 subtitle: "Agente de IA conversacional" }
 ```
 
 El mock simula streaming palabra por palabra con delays aleatorios (15-35ms), acumulando el texto en chunks `AIMessageChunk` y finalizando con un mensaje `ai` + `status: "done"`.
@@ -297,7 +295,7 @@ Es el corazón de la app. Maneja:
 
 - Lista de threads con menú contextual (editar nombre, eliminar)
 - Input inline para renombrar
-- Logo de la empresa en SVG
+- Logo en SVG
 - Usa `useIsMobile()` para adaptar comportamiento
 
 ---
@@ -406,9 +404,6 @@ Arranca automáticamente FastAPI (puerto 8000) y Next.js (puerto 3000).
 
 ### Semantic Models mockeados
 
-El Data Agent POC incluye datos de prueba sobre:
-- **Aceros globales** (SAE 1018, 1045, 304, 316, A36, 4140, 8620)
-- **Grupos de acero** con cantidades
-- **Porcentajes de chatarra** por grado
+El Data Agent POC incluye datos de prueba de ejemplo que se filtran según la consulta del usuario.
 
-Al consultar "aceros inoxidables", "304", "grupos", "chatarra", etc., el Data Agent responde con datos filtrados desde los Semantic Models simulados.
+Al consultar por categorías, el Data Agent responde con datos filtrados desde los Semantic Models simulados.
